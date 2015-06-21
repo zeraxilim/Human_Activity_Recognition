@@ -1,0 +1,131 @@
+---
+title: "Human Activity Recognition"
+output: html_document
+---
+
+#Introduction
+
+Data from personal activity monitoring devices is becoming more prevalent, and while most analysis of this data has focused on
+identifying the type of activity, the quality of motion is also important.  Here we consider a Weight Lifting Exercise (WLE) data
+set [1], which holds data from six test subjects performing a weight lifting exercise, both in the correct manner and in four
+different incorrect manners.  Here we detail a simple predictive modeling algorithm to identify whether the activity is being
+performed correctly based upon the activity monitoring data.
+
+#Data Set
+
+The WLE training data set contains 160 columns, but a well over half are blank except for a very small number of trials.  While sparse
+entries can be very valuable to a prediction algorithm if they correlate heavily with the result, including them in the training
+algorithm has a large computation cost, so here we drop columns with any empty cases.  We also remove the first seven columns of
+the data set.  These include the names of the participants -- which is relevant for predicting outcomes for them, but should be
+considered moot for a proper prediction outcome outside the data set.  We also remove all time data, which is irrelevant for the
+results.
+
+```{r}
+library(caret)
+train = read.csv("pml-training.csv",na.strings=c(""," ","NA","<NA>","#DIV/0!"))
+usedcols = colSums(is.na(train)) == 0
+train = train[,usedcols]
+train = train[,c(8:ncol(train))]
+ncol(train)
+```
+
+Once these cuts on the training data have been applied, the remaining data set has 53 columns, 52 of which are numerical predictors and the last of which is the activity type.  However, this data set is still too large based upon the available computational power, so we
+further reduce it through primary component analysis (PCA) decomposition.  A PCA algorithm is applied to encapsulate 95% of the variance, ultimately yielding 25 predictors.
+
+```{r}
+pcatransform = preProcess(train[,-ncol(train)],method="pca",thresh=0.95)
+pcatrain = predict(pcatransform,train[,-ncol(train)])
+ncol(pcatrain)
+```
+
+Unfortunately, while training on the remaining data set is feasible given the available computational power, cross-validation is not.  Thus, we consider a sub-sample of roughly 10% of the data set, selected at random, to train the model considered here.  We hereafter refer to this subset as the "restricted training set".
+
+```{r}
+set.seed(10000)
+trainingset = sample(x = nrow(train),size= 2000)
+finaltrain = pcatrain[trainingset,]
+finalresult = train$classe[trainingset]
+```
+
+
+#Model Definition
+
+For our predictive model, we use a random forest technique.  A model using the entire restricted training set is ultimately used to predict results for the test set, and 10-fold cross-validation on the restricted training set is used to estimate the model
+uncertainty.  The generation of these models is given by the following block; only the accuracy summary is saved from the models produced in the cross-validation.
+
+```{r,cache=TRUE}
+fullmodel <- train(finalresult~.,method="rf",data=finaltrain)
+for(i in 0:9) {
+  testrange = c((i*200 + 1): ((i+1) * 200))
+  submodel <- train(finalresult[-testrange]~.,method="rf",data=finaltrain[-testrange,])
+  confusion = confusionMatrix(finalresult[testrange],predict(submodel,finaltrain[testrange,]))
+  if(i == 0) {
+    kfoldaccuracy = confusion$overall
+  }
+  else {
+    kfoldaccuracy = rbind(kfoldaccuracy, confusion$overall)
+  }
+}
+```
+
+The accuracy estimates given by the 10-fold cross-validation are
+
+```{r}
+kfoldaccuracy = as.data.frame(kfoldaccuracy)
+kfoldaccuracy$Accuracy
+```
+
+Which average to
+
+```{r}
+mean(kfoldaccuracy$Accuracy)
+```
+
+with standard deviation
+
+```{r}
+sqrt(var(kfoldaccuracy$Accuracy))
+```
+
+As such, the prediction algorithm is expected to have 86% accuracy, and the accuracy should lie between 80% and 90% with high
+probability.  Since the remainder of the full training set still exists, we can also use that to estimate the accuracy of the model trained with the restricted training set on the full set.
+
+```{r}
+confusion = confusionMatrix(train$classe[-trainingset],predict(fullmodel,pcatrain[-trainingset,]))
+confusion$overall[1]
+```
+
+The resultant accuracy is consistent with that given by cross-validation. 
+
+#The Moment of Truth
+
+To predict the movement types associated with the test set, it must first be loaded and pre-processed with the same selection
+rules and transform.  Note that the columns kept are based on the training set and not the testing set for consistency.
+
+```{r}
+test = read.csv("pml-testing.csv",na.strings=c(""," ","NA","<NA>","#DIV/0!"))
+test = test[,usedcols]
+test=test[,c(8:ncol(test))]
+pcatest = predict(pcatransform,test[,-ncol(test)])
+```
+
+The predicted activity classes for the test set are then given below.  Also shown is whether results of the prediction algorithm matched the solutions in the course website.
+
+```{r}
+Problem_ID = test$problem_id
+Prediction = as.character(predict(fullmodel,pcatest))
+Match_Solution = rep(TRUE,20)
+Match_Solution[1] = FALSE
+Match_Solution[3] = FALSE
+Match_Solution[11] = FALSE
+cbind(Problem_ID,Prediction,Match_Solution)
+```
+
+Ultimately 17/20 of the predictions matched solution set, exactly in line with the accuracy estimate given by the cross-validation.
+
+
+
+
+#Bibliography
+
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
