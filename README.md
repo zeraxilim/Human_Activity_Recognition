@@ -1,1 +1,1 @@
-# Human_Activity_Recognition
+# All project data is included in HumanActivityData.html
